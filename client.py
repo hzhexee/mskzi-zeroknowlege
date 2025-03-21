@@ -3,6 +3,10 @@ import random
 import os
 import hashlib
 import time
+# Import encryption modules
+import fiat_shamir
+import shnorr_encryption
+import guillou_quisquater
 
 # Запрашиваем путь к файлу
 file_path = input("Введите путь к файлу для отправки: ")
@@ -120,12 +124,53 @@ print(f"[КЛИЕНТ] Ответ от сервера: {result}")
 if result == "AUTH_SUCCESS":
     print(f"[КЛИЕНТ] Аутентификация успешна. Начинаем передачу файла: {file_path}")
     try:
+        # Шифруем файл перед отправкой
+        print(f"[КЛИЕНТ] Шифруем файл используя алгоритм {protocol}...")
+        
+        # Создаем временный файл для шифрования
+        temp_encrypted_file = "temp_encrypted.txt"
+        
+        # Шифруем файл в зависимости от выбранного протокола
+        if protocol == 1:  # Фиат-Шамир
+            # Генерируем ключи
+            (pub_keys, secret) = fiat_shamir.generate_keys()
+            N, v = pub_keys
+            # Шифруем файл
+            fiat_shamir.encrypt_fileFS(file_path, temp_encrypted_file, secret, N)
+            # Сохраняем ключи для передачи серверу
+            encryption_info = f"FS:{N}:{secret}"
+        
+        elif protocol == 2:  # Шнорр
+            # Генерируем ключи
+            (pub_keys, secret) = shnorr_encryption.generate_keys()
+            p, g, y = pub_keys
+            # Шифруем файл
+            shnorr_encryption.encrypt_fileSH(file_path, temp_encrypted_file, secret, g, p)
+            # Сохраняем ключи для передачи серверу
+            encryption_info = f"SH:{p}:{g}:{secret}"
+        
+        elif protocol == 3:  # Гиллу-Кискатер
+            # Генерируем ключи
+            (pub_keys, secret) = guillou_quisquater.generate_keys()
+            N, v = pub_keys
+            # Шифруем файл
+            guillou_quisquater.encrypt_fileGQ(file_path, temp_encrypted_file, secret, N)
+            # Сохраняем ключи для передачи серверу
+            encryption_info = f"GQ:{N}:{v}:{secret}"
+        
+        print(f"[КЛИЕНТ] Файл успешно зашифрован")
+        
         # Отправляем имя файла
         file_name = os.path.basename(file_path)
         client_socket.send(f"FILENAME:{file_name}".encode())
+        response = client_socket.recv(1024).decode()  # Получаем подтверждение
         
-        # Отправляем размер файла
-        file_size = os.path.getsize(file_path)
+        # Отправляем информацию о шифровании
+        client_socket.send(f"ENCRYPTION:{encryption_info}".encode())
+        response = client_socket.recv(1024).decode()  # Получаем подтверждение
+        
+        # Отправляем размер зашифрованного файла
+        file_size = os.path.getsize(temp_encrypted_file)
         client_socket.send(f"FILESIZE:{file_size}".encode())
         
         # Получаем подтверждение готовности
@@ -135,14 +180,17 @@ if result == "AUTH_SUCCESS":
             client_socket.close()
             exit(1)
             
-        # Отправляем содержимое файла
-        with open(file_path, 'rb') as f:
+        # Отправляем содержимое зашифрованного файла
+        with open(temp_encrypted_file, 'rb') as f:
             data = f.read(4096)
             while data:
                 client_socket.send(data)
                 data = f.read(4096)
                 
-        print(f"[КЛИЕНТ] Файл {file_name} успешно передан")
+        print(f"[КЛИЕНТ] Зашифрованный файл {file_name} успешно передан")
+        
+        # Удаляем временный зашифрованный файл
+        os.remove(temp_encrypted_file)
         
         # Получаем подтверждение о получении файла
         confirmation = client_socket.recv(1024).decode()

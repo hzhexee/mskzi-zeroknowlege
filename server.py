@@ -1,6 +1,10 @@
 import socket
 import random
 import os
+# Import decryption modules
+import fiat_shamir
+import shnorr_encryption
+import guillou_quisquater
 
 # Создаем директорию для сохранения файлов, если она не существует
 SAVE_DIR = "received_files"
@@ -38,7 +42,7 @@ while True:
         if protocol == 1:  # Фиат-Шамир
             # Устанавливаем параметры криптографии
             n = 3233  # Простое число (p * q)
-            V = 855  # Открытый ключ клиента
+            V = 2197  # Открытый ключ клиента
             
             # Получаем X от клиента
             X = int(client_socket.recv(1024).decode())
@@ -54,7 +58,7 @@ while True:
             print(f"[СЕРВЕР] Получено y: {y}")
 
             # Проверяем условие y² = X * V^e mod n
-            auth_success = pow(y, 2, n) == (X * pow(V, e, n)) % n
+            auth_success = pow(y, 2, n) == ((X % n) * pow(V, e, n)) % n
             
         elif protocol == 2:  # Шнорр
             # Параметры для протокола Шнорра
@@ -113,42 +117,89 @@ while True:
             client_socket.send(b"AUTH_SUCCESS")
             print("[СЕРВЕР] Аутентификация успешна!")
             
-            # Получаем имя файла
-            filename_data = client_socket.recv(1024).decode()
-            if not filename_data.startswith("FILENAME:"):
-                print("[СЕРВЕР] Ошибка: неверный формат имени файла")
-                continue
-                
-            filename = filename_data.replace("FILENAME:", "")
-            
-            # Получаем размер файла
-            filesize_data = client_socket.recv(1024).decode()
-            if not filesize_data.startswith("FILESIZE:"):
-                print("[СЕРВЕР] Ошибка: неверный формат размера файла")
-                continue
-                
-            filesize = int(filesize_data.replace("FILESIZE:", ""))
-            print(f"[СЕРВЕР] Получаю файл: {filename}, размер: {filesize} байт")
-            
-            # Отправляем готовность к приему
-            client_socket.send(b"READY")
-            
-            # Принимаем файл
-            save_path = os.path.join(SAVE_DIR, filename)
-            bytes_received = 0
-            
-            with open(save_path, 'wb') as f:
-                while bytes_received < filesize:
-                    data = client_socket.recv(4096)
-                    if not data:
-                        break
-                    f.write(data)
-                    bytes_received += len(data)
+            try:
+                # Получаем имя файла
+                filename_data = client_socket.recv(1024).decode()
+                if not filename_data.startswith("FILENAME:"):
+                    print("[СЕРВЕР] Ошибка: неверный формат имени файла")
+                    continue
                     
-            print(f"[СЕРВЕР] Файл {filename} получен и сохранен как {save_path}")
-            
-            # Отправляем подтверждение
-            client_socket.send(f"FILE_RECEIVED: Файл {filename} успешно получен".encode())
+                filename = filename_data.replace("FILENAME:", "")
+                client_socket.send(b"OK")  # Подтверждаем получение
+                
+                # Получаем информацию о шифровании
+                encryption_data = client_socket.recv(1024).decode()
+                if not encryption_data.startswith("ENCRYPTION:"):
+                    print("[СЕРВЕР] Ошибка: неверный формат информации о шифровании")
+                    continue
+                    
+                encryption_info = encryption_data.replace("ENCRYPTION:", "")
+                client_socket.send(b"OK")  # Подтверждаем получение
+                print(f"[СЕРВЕР] Информация о шифровании: {encryption_info}")
+                
+                # Получаем размер файла
+                filesize_data = client_socket.recv(1024).decode()
+                if not filesize_data.startswith("FILESIZE:"):
+                    print("[СЕРВЕР] Ошибка: неверный формат размера файла")
+                    continue
+                    
+                filesize = int(filesize_data.replace("FILESIZE:", ""))
+                print(f"[СЕРВЕР] Получаю зашифрованный файл: {filename}, размер: {filesize} байт")
+                
+                # Отправляем готовность к приему
+                client_socket.send(b"READY")
+                
+                # Принимаем зашифрованный файл
+                encrypted_file = os.path.join(SAVE_DIR, f"encrypted_{filename}")
+                bytes_received = 0
+                
+                with open(encrypted_file, 'wb') as f:
+                    while bytes_received < filesize:
+                        data = client_socket.recv(4096)
+                        if not data:
+                            break
+                        f.write(data)
+                        bytes_received += len(data)
+                        
+                print(f"[СЕРВЕР] Зашифрованный файл получен и сохранен как {encrypted_file}")
+                
+                # Расшифровываем файл
+                decrypted_file = os.path.join(SAVE_DIR, filename)
+                
+                # Парсим информацию о шифровании и расшифровываем соответственно
+                enc_parts = encryption_info.split(":")
+                
+                if enc_parts[0] == "FS":  # Фиат-Шамир
+                    N = int(enc_parts[1])
+                    secret = int(enc_parts[2])
+                    print(f"[СЕРВЕР] Расшифровка файла с использованием Фиат-Шамир...")
+                    fiat_shamir.decrypt_fileFS(encrypted_file, decrypted_file, secret, N)
+                    
+                elif enc_parts[0] == "SH":  # Шнорр
+                    p = int(enc_parts[1])
+                    g = int(enc_parts[2])
+                    secret = int(enc_parts[3])
+                    print(f"[СЕРВЕР] Расшифровка файла с использованием Шнорр...")
+                    shnorr_encryption.decrypt_fileSH(encrypted_file, decrypted_file, secret, g, p)
+                    
+                elif enc_parts[0] == "GQ":  # Гиллу-Кискатер
+                    N = int(enc_parts[1])
+                    v = int(enc_parts[2])
+                    secret = int(enc_parts[3])
+                    print(f"[СЕРВЕР] Расшифровка файла с использованием Гиллу-Кискатер...")
+                    guillou_quisquater.decrypt_fileGQ(encrypted_file, decrypted_file, v, N)
+                
+                # Удаляем зашифрованный файл
+                os.remove(encrypted_file)
+                
+                print(f"[СЕРВЕР] Файл успешно расшифрован и сохранен как {decrypted_file}")
+                
+                # Отправляем подтверждение
+                client_socket.send(f"FILE_RECEIVED: Файл {filename} успешно получен и расшифрован".encode())
+                
+            except Exception as e:
+                print(f"[СЕРВЕР] Ошибка при обработке файла: {str(e)}")
+                client_socket.send(f"ERROR: {str(e)}".encode())
             
         else:
             client_socket.send(b"AUTH_FAILED")
