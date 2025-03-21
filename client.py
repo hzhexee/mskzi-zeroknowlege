@@ -4,9 +4,9 @@ import os
 import hashlib
 import time
 # Import encryption modules
-import fiat_shamir
-import shnorr_encryption
-import guillou_quisquater
+import crypto.fiat_shamir as fiat_shamir
+import crypto.shnorr_encryption as shnorr_encryption
+import crypto.guillou_quisquater as guillou_quisquater
 
 # Запрашиваем путь к файлу
 file_path = input("Введите путь к файлу для отправки: ")

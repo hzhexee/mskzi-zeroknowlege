@@ -2,9 +2,9 @@ import socket
 import random
 import os
 # Import decryption modules
-import fiat_shamir
-import shnorr_encryption
-import guillou_quisquater
+import crypto.fiat_shamir as fiat_shamir
+import crypto.shnorr_encryption as shnorr_encryption
+import crypto.guillou_quisquater as guillou_quisquater
 
 # Создаем директорию для сохранения файлов, если она не существует
 SAVE_DIR = "received_files"
