@@ -1,13 +1,18 @@
-import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox
-import threading
+import sys
+import os
 import socket
+import threading
 import queue
 import time
-import os
-import random  # Добавлен импорт модуля random
+import random
 from datetime import datetime
-import sys
+
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+                            QLabel, QPushButton, QLineEdit, QTextEdit, QTabWidget, 
+                            QTreeWidget, QTreeWidgetItem, QMessageBox, QGroupBox,
+                            QFormLayout, QFrame, QSplitter)
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot, QSize
+from PyQt6.QtGui import QPalette, QColor, QFont
 
 # Импортируем модули криптографии
 import crypto.fiat_shamir as fiat_shamir
@@ -19,12 +24,18 @@ SAVE_DIR = "received_files"
 if not os.path.exists(SAVE_DIR):
     os.makedirs(SAVE_DIR)
 
-class ServerGUI:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Сервер с нулевым разглашением - GUI")
-        self.root.geometry("800x600")
-        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+class ServerGUI(QMainWindow):
+    # Сигналы для безопасного обновления GUI из других потоков
+    log_signal = pyqtSignal(str)
+    clients_update_signal = pyqtSignal()
+    files_update_signal = pyqtSignal()
+    status_update_signal = pyqtSignal(str)
+
+    def __init__(self):
+        super().__init__()
+        
+        self.setWindowTitle("Сервер с нулевым разглашением - GUI")
+        self.resize(800, 600)
         
         # Переменные для управления сервером
         self.server_running = False
@@ -34,132 +45,271 @@ class ServerGUI:
         self.log_queue = queue.Queue()
         self.clients = {}  # для хранения информации о клиентах
         
-        # Порт сервера
-        self.port_var = tk.StringVar(value="8080")
+        # Порт сервера (по умолчанию 8080)
+        self.port = "8080"
         
         # Создание интерфейса
         self.create_widgets()
         
-        # Запуск процесса обработки логов
-        self.root.after(100, self.process_log_queue)
+        # Подключение сигналов
+        self.log_signal.connect(self.append_log)
+        self.clients_update_signal.connect(self._update_clients_list_gui)
+        self.files_update_signal.connect(self.refresh_files_list)
+        self.status_update_signal.connect(self.update_status_bar)
+        
+        # Запуск таймера для обработки логов
+        self.log_timer = QTimer(self)
+        self.log_timer.timeout.connect(self.process_log_queue)
+        self.log_timer.start(100)
+        
+        # Применяем темную тему
+        self.apply_dark_theme()
+    
+    def apply_dark_theme(self):
+        """Применяем темную тему к приложению"""
+        app = QApplication.instance()
+        
+        # Основные цвета темной темы
+        dark_palette = QPalette()
+        dark_palette.setColor(QPalette.ColorRole.Window, QColor(53, 53, 53))
+        dark_palette.setColor(QPalette.ColorRole.WindowText, QColor(255, 255, 255))
+        dark_palette.setColor(QPalette.ColorRole.Base, QColor(35, 35, 35))
+        dark_palette.setColor(QPalette.ColorRole.AlternateBase, QColor(53, 53, 53))
+        dark_palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(25, 25, 25))
+        dark_palette.setColor(QPalette.ColorRole.ToolTipText, QColor(255, 255, 255))
+        dark_palette.setColor(QPalette.ColorRole.Text, QColor(255, 255, 255))
+        dark_palette.setColor(QPalette.ColorRole.Button, QColor(53, 53, 53))
+        dark_palette.setColor(QPalette.ColorRole.ButtonText, QColor(255, 255, 255))
+        dark_palette.setColor(QPalette.ColorRole.BrightText, Qt.GlobalColor.red)
+        dark_palette.setColor(QPalette.ColorRole.Link, QColor(42, 130, 218))
+        dark_palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
+        dark_palette.setColor(QPalette.ColorRole.HighlightedText, QColor(35, 35, 35))
+        
+        # Применяем палитру
+        app.setPalette(dark_palette)
+        
+        # Дополнительные стили
+        style_sheet = """
+        QMainWindow {
+            background-color: #353535;
+        }
+        QWidget {
+            background-color: #353535;
+            color: #ffffff;
+        }
+        QPushButton {
+            background-color: #444444;
+            color: white;
+            border: 1px solid #555555;
+            border-radius: 3px;
+            padding: 5px 15px;
+            margin: 2px;
+        }
+        QPushButton:hover {
+            background-color: #666666;
+        }
+        QPushButton:pressed {
+            background-color: #777777;
+        }
+        QPushButton:disabled {
+            background-color: #323232;
+            color: #656565;
+        }
+        QLineEdit {
+            background-color: #232323;
+            color: white;
+            border: 1px solid #555555;
+            border-radius: 3px;
+            padding: 2px;
+        }
+        QTextEdit {
+            background-color: #232323;
+            color: white;
+            border: 1px solid #555555;
+        }
+        QTabWidget::pane {
+            border: 1px solid #555555;
+            background-color: #353535;
+        }
+        QTabBar::tab {
+            background-color: #353535;
+            color: #ffffff;
+            padding: 8px 15px;
+            border: 1px solid #555555;
+            border-bottom: none;
+            border-top-left-radius: 4px;
+            border-top-right-radius: 4px;
+        }
+        QTabBar::tab:selected {
+            background-color: #444444;
+            border-bottom: none;
+        }
+        QTabBar::tab:!selected {
+            margin-top: 2px;
+            background-color: #232323;
+        }
+        QTreeWidget {
+            background-color: #232323;
+            color: #ffffff;
+            border: 1px solid #555555;
+            alternate-background-color: #353535;
+        }
+        QTreeWidget::item {
+            padding: 5px;
+            border-bottom: 1px solid #444444;
+        }
+        QTreeWidget::item:selected {
+            background-color: #2a82da;
+            color: #ffffff;
+        }
+        QHeaderView::section {
+            background-color: #444444;
+            color: white;
+            padding: 5px;
+            border: 1px solid #555555;
+        }
+        QGroupBox {
+            border: 1px solid #555555;
+            border-radius: 3px;
+            margin-top: 1ex;
+            padding-top: 10px;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            subcontrol-position: top center;
+            padding: 0 5px;
+            color: #ffffff;
+        }
+        QStatusBar {
+            background-color: #232323;
+            color: #ffffff;
+        }
+        """
+        app.setStyleSheet(style_sheet)
 
     def create_widgets(self):
-        # Создаем главный фрейм
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        """Создание GUI-элементов"""
+        # Центральный виджет
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QVBoxLayout(central_widget)
         
-        # Верхняя панель с настройками сервера
-        settings_frame = ttk.LabelFrame(main_frame, text="Настройки сервера", padding="5")
-        settings_frame.pack(fill=tk.X, padx=5, pady=5)
+        # Панель настроек сервера
+        settings_group = QGroupBox("Настройки сервера")
+        settings_layout = QHBoxLayout(settings_group)
         
         # Порт сервера
-        ttk.Label(settings_frame, text="Порт:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
-        port_entry = ttk.Entry(settings_frame, textvariable=self.port_var, width=10)
-        port_entry.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
+        port_label = QLabel("Порт:")
+        self.port_entry = QLineEdit(self.port)
+        self.port_entry.setMaximumWidth(100)
         
         # Кнопки управления сервером
-        self.start_button = ttk.Button(settings_frame, text="Запустить сервер", command=self.start_server)
-        self.start_button.grid(row=0, column=2, padx=5, pady=5)
+        self.start_button = QPushButton("Запустить сервер")
+        self.start_button.clicked.connect(self.start_server)
         
-        self.stop_button = ttk.Button(settings_frame, text="Остановить сервер", command=self.stop_server, state=tk.DISABLED)
-        self.stop_button.grid(row=0, column=3, padx=5, pady=5)
+        self.stop_button = QPushButton("Остановить сервер")
+        self.stop_button.clicked.connect(self.stop_server)
+        self.stop_button.setEnabled(False)
         
-        # Добавляем отступ между верхней и нижней панелями
-        ttk.Separator(main_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=5, pady=5)
+        # Добавляем элементы в панель настроек
+        settings_layout.addWidget(port_label)
+        settings_layout.addWidget(self.port_entry)
+        settings_layout.addWidget(self.start_button)
+        settings_layout.addWidget(self.stop_button)
+        settings_layout.addStretch()
         
-        # Панель с информацией
-        info_frame = ttk.Frame(main_frame)
-        info_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        # Разделительная линия
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.HLine)
+        separator.setFrameShadow(QFrame.Shadow.Sunken)
         
-        # Создаем вкладки
-        tab_control = ttk.Notebook(info_frame)
+        # Вкладки для информации
+        self.tab_widget = QTabWidget()
         
         # Вкладка логов
-        log_tab = ttk.Frame(tab_control)
-        tab_control.add(log_tab, text="Логи сервера")
+        log_tab = QWidget()
+        log_layout = QVBoxLayout(log_tab)
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        log_layout.addWidget(self.log_text)
+        self.tab_widget.addTab(log_tab, "Логи сервера")
         
         # Вкладка клиентов
-        clients_tab = ttk.Frame(tab_control)
-        tab_control.add(clients_tab, text="Подключенные клиенты")
+        clients_tab = QWidget()
+        clients_layout = QVBoxLayout(clients_tab)
+        self.clients_tree = QTreeWidget()
+        self.clients_tree.setHeaderLabels(["IP-адрес", "Порт", "Протокол", "Статус", "Время подключения"])
+        self.clients_tree.setAlternatingRowColors(True)
+        self.clients_tree.setColumnWidth(0, 120)
+        self.clients_tree.setColumnWidth(1, 70)
+        self.clients_tree.setColumnWidth(2, 100)
+        self.clients_tree.setColumnWidth(3, 100)
+        self.clients_tree.setColumnWidth(4, 150)
+        clients_layout.addWidget(self.clients_tree)
+        self.tab_widget.addTab(clients_tab, "Подключенные клиенты")
         
         # Вкладка файлов
-        files_tab = ttk.Frame(tab_control)
-        tab_control.add(files_tab, text="Полученные файлы")
+        files_tab = QWidget()
+        files_layout = QVBoxLayout(files_tab)
+        self.files_tree = QTreeWidget()
+        self.files_tree.setHeaderLabels(["Имя файла", "Размер", "Клиент", "Время получения"])
+        self.files_tree.setAlternatingRowColors(True)
+        self.files_tree.setColumnWidth(0, 200)
+        self.files_tree.setColumnWidth(1, 100)
+        self.files_tree.setColumnWidth(2, 150)
+        self.files_tree.setColumnWidth(3, 150)
+        files_layout.addWidget(self.files_tree)
         
-        tab_control.pack(fill=tk.BOTH, expand=True)
+        # Кнопка обновления списка файлов
+        refresh_files_button = QPushButton("Обновить список файлов")
+        refresh_files_button.clicked.connect(self.refresh_files_list)
+        files_layout.addWidget(refresh_files_button)
         
-        # Настройка вкладки логов
-        self.log_text = scrolledtext.ScrolledText(log_tab, wrap=tk.WORD, width=80, height=20)
-        self.log_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        self.log_text.config(state=tk.DISABLED)
-        
-        # Настройка вкладки клиентов
-        self.clients_tree = ttk.Treeview(clients_tab, columns=("ip", "port", "protocol", "status", "connected_time"), show="headings")
-        self.clients_tree.heading("ip", text="IP-адрес")
-        self.clients_tree.heading("port", text="Порт")
-        self.clients_tree.heading("protocol", text="Протокол")
-        self.clients_tree.heading("status", text="Статус")
-        self.clients_tree.heading("connected_time", text="Время подключения")
-        
-        self.clients_tree.column("ip", width=120, anchor=tk.CENTER)
-        self.clients_tree.column("port", width=70, anchor=tk.CENTER)
-        self.clients_tree.column("protocol", width=100, anchor=tk.CENTER)
-        self.clients_tree.column("status", width=100, anchor=tk.CENTER)
-        self.clients_tree.column("connected_time", width=150, anchor=tk.CENTER)
-        
-        self.clients_tree.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
-        # Настройка вкладки файлов
-        self.files_tree = ttk.Treeview(files_tab, columns=("filename", "size", "client", "received_time"), show="headings")
-        self.files_tree.heading("filename", text="Имя файла")
-        self.files_tree.heading("size", text="Размер")
-        self.files_tree.heading("client", text="Клиент")
-        self.files_tree.heading("received_time", text="Время получения")
-        
-        self.files_tree.column("filename", width=200)
-        self.files_tree.column("size", width=100, anchor=tk.CENTER)
-        self.files_tree.column("client", width=150, anchor=tk.CENTER)
-        self.files_tree.column("received_time", width=150, anchor=tk.CENTER)
-        
-        self.files_tree.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
-        # Кнопка для обновления списка файлов
-        refresh_files_button = ttk.Button(files_tab, text="Обновить список файлов", command=self.refresh_files_list)
-        refresh_files_button.pack(pady=5)
+        self.tab_widget.addTab(files_tab, "Полученные файлы")
         
         # Статусная строка
-        self.status_var = tk.StringVar(value="Сервер не запущен")
-        status_bar = ttk.Label(main_frame, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
-        status_bar.pack(fill=tk.X, side=tk.BOTTOM, padx=5, pady=5)
-
+        self.statusBar().showMessage("Сервер не запущен")
+        
+        # Добавляем все элементы в главный лейаут
+        main_layout.addWidget(settings_group)
+        main_layout.addWidget(separator)
+        main_layout.addWidget(self.tab_widget, 1)  # 1 - растягивается по вертикали
+        
     def log(self, message):
         """Добавляет сообщение в очередь логов"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.log_queue.put(f"[{timestamp}] {message}")
-
+    
     def process_log_queue(self):
         """Обрабатывает очередь логов и обновляет GUI"""
         try:
             while True:
                 message = self.log_queue.get_nowait()
-                self.log_text.config(state=tk.NORMAL)
-                self.log_text.insert(tk.END, message + "\n")
-                self.log_text.see(tk.END)
-                self.log_text.config(state=tk.DISABLED)
+                self.log_signal.emit(message)
                 self.log_queue.task_done()
         except queue.Empty:
             pass
-        finally:
-            # Повторяем проверку каждые 100 мс
-            self.root.after(100, self.process_log_queue)
-
+    
+    @pyqtSlot(str)
+    def append_log(self, message):
+        """Добавляет сообщение в лог-виджет"""
+        self.log_text.append(message)
+        # Прокрутка до конца
+        scrollbar = self.log_text.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+    
+    @pyqtSlot(str)
+    def update_status_bar(self, message):
+        """Обновляет статусную строку"""
+        self.statusBar().showMessage(message)
+    
     def start_server(self):
         """Запускает сервер"""
         if self.server_running:
             return
         
         try:
-            port = int(self.port_var.get())
+            port = int(self.port_entry.text())
             if port < 1 or port > 65535:
                 raise ValueError("Порт должен быть между 1 и 65535")
             
@@ -168,15 +318,15 @@ class ServerGUI:
             self.server_thread.start()
             
             self.server_running = True
-            self.start_button.config(state=tk.DISABLED)
-            self.stop_button.config(state=tk.NORMAL)
-            self.status_var.set(f"Сервер запущен на порту {port}")
+            self.start_button.setEnabled(False)
+            self.stop_button.setEnabled(True)
+            self.status_update_signal.emit(f"Сервер запущен на порту {port}")
             self.log(f"Сервер запущен на порту {port}")
             
         except ValueError as e:
-            messagebox.showerror("Ошибка", f"Некорректный порт: {str(e)}")
+            QMessageBox.critical(self, "Ошибка", f"Некорректный порт: {str(e)}")
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось запустить сервер: {str(e)}")
+            QMessageBox.critical(self, "Ошибка", f"Не удалось запустить сервер: {str(e)}")
     
     def stop_server(self):
         """Останавливает сервер"""
@@ -197,16 +347,16 @@ class ServerGUI:
                 self.server_thread = None
             
             # Очищаем список клиентов
-            self.clients_tree.delete(*self.clients_tree.get_children())
+            self.clients_tree.clear()
             self.clients = {}
             
-            self.start_button.config(state=tk.NORMAL)
-            self.stop_button.config(state=tk.DISABLED)
-            self.status_var.set("Сервер остановлен")
+            self.start_button.setEnabled(True)
+            self.stop_button.setEnabled(False)
+            self.status_update_signal.emit("Сервер остановлен")
             self.log("Сервер остановлен")
             
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Ошибка при остановке сервера: {str(e)}")
+            QMessageBox.critical(self, "Ошибка", f"Ошибка при остановке сервера: {str(e)}")
     
     def run_server(self, port):
         """Функция для запуска сервера в отдельном потоке"""
@@ -234,7 +384,7 @@ class ServerGUI:
                     }
                     
                     # Обновляем отображение клиентов
-                    self.update_clients_list()
+                    self.clients_update_signal.emit()
                     
                     # Запускаем поток для обработки клиента
                     client_thread = threading.Thread(
@@ -275,7 +425,7 @@ class ServerGUI:
                 
                 # Обновляем информацию о клиенте
                 self.clients[client_id]["protocol"] = protocol_name
-                self.update_clients_list()
+                self.clients_update_signal.emit()
                 
                 self.log(f"Клиент {addr} выбрал протокол: {protocol_name}")
             except ValueError as e:
@@ -297,7 +447,7 @@ class ServerGUI:
                 self.log(f"Получено X от {addr}: {X}")
 
                 # Генерируем случайное e {0,1} и отправляем клиенту
-                e = random.randint(0, 1)  # Исправлено: random вместо threading
+                e = random.randint(0, 1)
                 client_socket.send(str(e).encode())
                 self.log(f"Отправлено e клиенту {addr}: {e}")
 
@@ -322,7 +472,7 @@ class ServerGUI:
                 self.log(f"Получено r от {addr}: {r}")
                 
                 # Отправляем случайный вызов e
-                e = random.randint(1, q-1)  # Исправлено: random вместо threading
+                e = random.randint(1, q-1)
                 client_socket.send(str(e).encode())
                 self.log(f"Отправлено e клиенту {addr}: {e}")
                 
@@ -348,7 +498,7 @@ class ServerGUI:
                 self.log(f"Получено X от {addr}: {X}")
                 
                 # Отправляем случайный вызов e
-                e = random.randint(1, v-1)  # Исправлено: random вместо threading
+                e = random.randint(1, v-1)
                 client_socket.send(str(e).encode())
                 self.log(f"Отправлено e клиенту {addr}: {e}")
                 
@@ -364,7 +514,7 @@ class ServerGUI:
             # Обновляем статус клиента
             if auth_success:
                 self.clients[client_id]["status"] = "Аутентифицирован"
-                self.update_clients_list()
+                self.clients_update_signal.emit()
                 
                 client_socket.send(b"AUTH_SUCCESS")
                 self.log(f"Аутентификация клиента {addr} успешна!")
@@ -447,7 +597,7 @@ class ServerGUI:
                     self.log(f"Файл от {addr} успешно расшифрован и сохранен как {decrypted_file}")
                     
                     # Обновляем список файлов
-                    self.refresh_files_list()
+                    self.files_update_signal.emit()
                     
                     # Отправляем подтверждение
                     client_socket.send(f"FILE_RECEIVED: Файл {filename} успешно получен и расшифрован".encode())
@@ -458,7 +608,7 @@ class ServerGUI:
                 
             else:
                 self.clients[client_id]["status"] = "Ошибка аутентификации"
-                self.update_clients_list()
+                self.clients_update_signal.emit()
                 
                 client_socket.send(b"AUTH_FAILED")
                 self.log(f"Аутентификация клиента {addr} провалена!")
@@ -469,40 +619,38 @@ class ServerGUI:
             # Удаляем клиента из списка
             if client_id in self.clients:
                 del self.clients[client_id]
-                self.update_clients_list()
+                self.clients_update_signal.emit()
                 
             client_socket.close()
             self.log(f"Соединение с клиентом {addr} закрыто")
     
-    def update_clients_list(self):
-        """Обновляет список клиентов в GUI"""
-        # Выполняем обновление через главный поток, т.к. работаем с GUI
-        self.root.after(0, self._update_clients_list_gui)
-    
+    @pyqtSlot()
     def _update_clients_list_gui(self):
-        """Вспомогательная функция для обновления GUI из главного потока"""
-        # Очищаем текущий список
-        self.clients_tree.delete(*self.clients_tree.get_children())
+        """Обновляет список клиентов в GUI"""
+        self.clients_tree.clear()
         
-        # Добавляем всех клиентов
         for client_id, client_info in self.clients.items():
             addr = client_info["addr"]
             protocol = client_info["protocol"]
             status = client_info["status"]
             connected_time = client_info["connected_time"]
             
-            self.clients_tree.insert(
-                "", tk.END, 
-                values=(addr[0], addr[1], protocol, status, connected_time)
-            )
+            item = QTreeWidgetItem([
+                addr[0], 
+                str(addr[1]), 
+                protocol, 
+                status, 
+                connected_time
+            ])
+            
+            self.clients_tree.addTopLevelItem(item)
     
+    @pyqtSlot()
     def refresh_files_list(self):
         """Обновляет список полученных файлов"""
-        # Очищаем текущий список
-        self.files_tree.delete(*self.files_tree.get_children())
+        self.files_tree.clear()
         
         try:
-            # Получаем список файлов из директории
             if os.path.exists(SAVE_DIR):
                 files = [f for f in os.listdir(SAVE_DIR) if not f.startswith("encrypted_")]
                 
@@ -533,23 +681,31 @@ class ServerGUI:
                     else:
                         size_str = f"{size/(1024*1024):.1f} МБ"
                     
-                    self.files_tree.insert(
-                        "", tk.END, 
-                        values=(filename, size_str, client, modified_time)
-                    )
+                    item = QTreeWidgetItem([filename, size_str, client, modified_time])
+                    self.files_tree.addTopLevelItem(item)
         except Exception as e:
             self.log(f"Ошибка при обновлении списка файлов: {str(e)}")
     
-    def on_closing(self):
+    def closeEvent(self, event):
         """Обработчик закрытия окна"""
         if self.server_running:
-            if messagebox.askyesno("Подтверждение", "Сервер запущен. Вы уверены, что хотите закрыть приложение?"):
+            reply = QMessageBox.question(
+                self, 
+                "Подтверждение", 
+                "Сервер запущен. Вы уверены, что хотите закрыть приложение?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.Yes:
                 self.stop_server()
-                self.root.destroy()
+                event.accept()
+            else:
+                event.ignore()
         else:
-            self.root.destroy()
+            event.accept()
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = ServerGUI(root)
-    root.mainloop()
+    app = QApplication(sys.argv)
+    window = ServerGUI()
+    window.show()
+    sys.exit(app.exec())
